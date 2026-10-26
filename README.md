@@ -14,6 +14,11 @@ cp .env.example .env    # then export those vars, or set them in your shell
 mysql -u root -p < sql/01_schema.sql
 mysql -u root -p < sql/02_sample_data.sql        # optional demo data
 
+#or
+mysql -u root -p
+source sql/01_schema.sql
+source sql/02_sample_data.sql 
+
 # 2. Django's own tables + app_user (login accounts, permanent-admin trigger)
 python manage.py migrate
 
@@ -23,38 +28,9 @@ python manage.py create_app_user --email anshul.pawar25@spit.ac.in
 python manage.py runserver
 ```
 
-Order matters: SQL first, then `migrate` (app_user has a foreign key to `person`).
-
-### Upgrading a database built from the old schema (with faculty)
-
-Don't rebuild; run the upgrade patches in this order (each one says what it changes):
-
-```bash
-mysql -u root -p < sql/upgrade/10_approver_patch.sql      # skip if you already ran it
-mysql -u root -p < sql/upgrade/20_roles_venues_patch.sql
-python manage.py migrate
-python manage.py create_app_user --email anshul.pawar25@spit.ac.in --name "Anshul Pawar"
-mysql -u root -p < sql/upgrade/30_drop_faculty_patch.sql  # needs the root admin: faculty approvals move to him
-```
-
-The result is structurally identical to a fresh `01_schema.sql` build.
-
-### Cleaning up an existing database (v3 to v4)
-
-v4 removes what nothing used (see `sql/upgrade/40_cleanup_patch.sql` for the full list), closes a hole where a
-venue could be approved for an unapproved event, and makes the "waiting for approval" alerts close themselves.
-Your data and login accounts stay. One command:
-
-```bash
-mysql -u root -p < sql/upgrade/40_cleanup_patch.sql
-```
-
-It deletes `student.year / division / dob / dept_id` and `person.street / city_id` with their data, since the app never filled them.
-Checked on a v3 database: same row counts afterwards, and the structure matches a fresh v4 build (same 31 triggers, tables and views).
-
 ## UI
 
-`python manage.py runserver`, then open http://127.0.0.1:8000/ . Django serves `web/` itself (same origin as `/api`, no CORS, no build step).
+`python manage.py runserver`, then open http://127.0.0.1:8000/ . 
 
 | Page | For |
 |---|---|
@@ -65,7 +41,6 @@ Checked on a v3 database: same row counts afterwards, and the structure matches 
 | `approvals.html` | council / admin: approve / reject events and venue bookings, keep / cancel flagged bookings |
 | `admin.html` | council / admin dashboard: stats, alerts, activity log, accounts, venues |
 
-Added for the UI (additive): `GET /api/me/events` (events.mine), `GET /api/me/registrations/full` (registrations.mine), `WEB_DIR` in settings and the static route in `config/urls.py`.
 
 ## Who can do what
 
@@ -103,7 +78,7 @@ Four roles, one per account (`app_user.role`):
 ## Payment
 
 No gateway. Registering just records the registration (`amount_paid` stays 0).
-The hook is `registrations/payments.py`; swap `PAYMENT_GATEWAY` in settings when a real one exists.
+The hook is `registrations/payments.py`; will swap `PAYMENT_GATEWAY` in settings  when real one will exist
 
 ## Try it
 
@@ -116,14 +91,8 @@ python tests/smoke_live.py    # walks the main flows against a freshly seeded DB
 ```
 config/         settings, root urls
 sql/            01_schema (final schema), 02_sample_data, 90_trigger_tests
-sql/upgrade/    10, 20, 30, 40 patches: only for a database built from an older schema
 common/         DB helpers, trigger-error -> HTTP mapping, exception handler
 accounts/       app_user (the only Django-managed table of ours), login, permissions, admin user mgmt
 directory/      person / student / lookups (unmanaged models)
 committees/  events/  venues/  registrations/  monitoring/
 ```
-
-## Not built yet
-- editing a student's roll number after signup
-- scheduled jobs (cron or MySQL event scheduler)
-- real test suite (the smoke script is a stopgap; needs a runner that loads sql/ into the test DB)
