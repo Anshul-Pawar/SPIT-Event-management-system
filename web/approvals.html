@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approvals · SPIT Events</title>
+<link rel="stylesheet" href="css/bauhaus.css">
+</head>
+<body>
+<main>
+  <div class="page-title"><div class="wrap"><div>
+    <p class="eyebrow"><span class="shape tri s-blue"></span>Council · Admin</p><h1>Approvals</h1></div>
+    <p class="muted" style="max-width:34ch">Events first, then their venue bookings. A venue can only be approved once its event is.</p></div></div>
+
+  <div class="tabs"><div class="wrap" role="tablist" id="tabs">
+    <button role="tab" data-tab="t-events" aria-selected="true">Events <span class="count" id="n-events">0</span></button>
+    <button role="tab" data-tab="t-bookings" aria-selected="false">Venue bookings <span class="count" id="n-bookings">0</span></button>
+    <button role="tab" data-tab="t-flagged" aria-selected="false">Flagged <span class="count" id="n-flagged">0</span></button></div></div>
+
+  <section class="wrap section" style="padding-top:32px">
+    <div id="t-events"><div class="loading">Loading</div></div>
+    <div id="t-bookings" class="hidden"></div>
+    <div id="t-flagged" class="hidden"></div>
+  </section>
+</main>
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  const { $, $$, esc, api, fmt, shapeEl, statusChip, toast, fail } = App;
+  await App.boot("approvals", { require: "approver" });
+  const show = App.tabs($("#tabs"));
+  if (location.hash === "#flagged") show("t-flagged");
+  let data = { events: [], venue_bookings: [], flagged_bookings: [] };
+
+  async function load() {
+    try { data = await api("/approvals/pending"); } catch (e) { fail(e); }
+    $("#n-events").textContent = data.events.length;
+    $("#n-bookings").textContent = data.venue_bookings.length;
+    $("#n-flagged").textContent = data.flagged_bookings.length;
+    drawEvents(); drawBookings(); drawFlagged();
+  }
+
+  const empty = (t) => `<div class="empty">${shapeEl("circle", "s-yellow lg")}<h2>All clear</h2><p class="muted" style="margin-top:10px">${t}</p></div>`;
+
+  function drawEvents() {
+    const box = $("#t-events");
+    if (!data.events.length) { box.innerHTML = empty("No events are waiting for a decision."); return; }
+    box.innerHTML = data.events.map((e) => `
+      <article class="panel" style="margin-bottom:20px" data-event="${e.event_id}">
+        <header class="yellow"><h3>${esc(e.title)}</h3><span class="chip">${esc(e.committee)}</span></header>
+        <div class="pad">
+          <div class="flex" style="gap:28px;margin-bottom:16px">
+            <div><h4 class="muted">Fee</h4><b>${fmt.money(e.fee)}</b></div>
+            <div><h4 class="muted">Seats</h4><b>${e.max_seats}</b></div>
+            <div><h4 class="muted">Registration closes</h4><b>${fmt.dateLong(e.reg_deadline)}</b></div>
+          </div>
+          <details data-load="${e.event_id}"><summary>Sessions</summary><div class="pad sess">Loading…</div></details>
+          <div class="field" style="margin:18px 0 12px"><label for="r${e.event_id}">Remarks (optional, shown to the committee)</label>
+            <input id="r${e.event_id}" maxlength="200" placeholder="e.g. Approved for lab use"></div>
+          <div class="flex"><button class="btn blue" data-act="approve" type="button">Approve</button>
+            <button class="btn red" data-act="reject" type="button">Reject</button></div>
+        </div></article>`).join("");
+  }
+
+  function drawBookings() {
+    const box = $("#t-bookings");
+    if (!data.venue_bookings.length) { box.innerHTML = empty("No venue requests are waiting."); return; }
+    box.innerHTML = data.venue_bookings.map((b) => `
+      <article class="item" data-b="${b.event_id}/${b.session_no}/${b.venue_id}">
+        <span class="bar s-blue" style="background:var(--blue)"></span>
+        <div><h3>${esc(b.venue_name)}</h3>
+          <p><strong>${esc(b.event)}</strong> · session ${b.session_no}</p>
+          <p class="upper muted">${fmt.dateLong(b.session_date)} · ${fmt.time(b.start_time)}–${fmt.time(b.end_time)}</p></div>
+        <div class="actions"><button class="btn blue small" data-act="b-approve" type="button">Approve</button>
+          <button class="btn red small" data-act="b-reject" type="button">Reject</button></div>
+      </article>`).join("");
+  }
+
+  function drawFlagged() {
+    const box = $("#t-flagged");
+    if (!data.flagged_bookings.length) { box.innerHTML = empty("No bookings at suspended or removed venues."); return; }
+    box.innerHTML = `<p class="hint" style="margin:0 0 12px">These venues went out of service after being booked. Keep the booking, or cancel it so the committee can request another venue.</p>` +
+      data.flagged_bookings.map((b) => `
+      <article class="item" data-b="${b.event_id}/${b.session_no}/${b.venue_id}">
+        <span class="bar" style="background:var(--red)"></span>
+        <div><h3>${esc(b.venue_name)} ${App.statusChip(b.venue_status)}</h3>
+          <p><strong>${esc(b.event)}</strong> · session ${b.session_no} · booking ${App.statusChip(b.booking_status)}</p>
+          <p class="upper muted">${fmt.dateLong(b.session_date)} · ${fmt.time(b.start_time)}–${fmt.time(b.end_time)}</p></div>
+        <div class="actions"><button class="btn blue small" data-act="f-keep" type="button">Keep</button>
+          <button class="btn red small" data-act="f-cancel" type="button">Cancel booking</button></div>
+      </article>`).join("");
+  }
+
+  $("#t-events").addEventListener("toggle", async (ev) => {
+    const d = ev.target; if (!d.matches("details[data-load]") || !d.open || d.dataset.done) return;
+    d.dataset.done = "1";
+    try {
+      const full = await api("/events/" + d.dataset.load);
+      d.querySelector(".sess").innerHTML = (full.sessions || []).map((s) =>
+        `<p><strong>${s.session_no}. ${esc(s.title)}</strong><br><span class="upper muted">${fmt.dateLong(s.session_date)} · ${fmt.time(s.start_time)}–${fmt.time(s.end_time)}${s.venue_name ? " · " + esc(s.venue_name) : ""}</span></p>`
+      ).join("<hr style='border:0;border-top:2px solid var(--ink);margin:10px 0'>") || "No sessions.";
+    } catch (e) { d.querySelector(".sess").textContent = e.message; }
+  }, true);
+
+  document.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-act]"); if (!btn) return;
+    const act = btn.dataset.act;
+    btn.disabled = true;
+    try {
+      if (act === "approve" || act === "reject") {
+        const card = btn.closest("[data-event]"), id = card.dataset.event;
+        const remarks = $("#r" + id).value.trim();
+        await api(`/events/${id}/${act}`, { method: "POST", body: { remarks } });
+        toast(act === "approve" ? "Event approved." : "Event rejected.");
+      } else if (act === "f-keep" || act === "f-cancel") {
+        const [e, s, v] = btn.closest("[data-b]").dataset.b.split("/");
+        await api(`/events/${e}/sessions/${s}/bookings/${v}/${act === "f-keep" ? "keep" : "cancel"}`, { method: "POST", body: {} });
+        toast(act === "f-keep" ? "Booking kept." : "Booking cancelled.");
+      } else {
+        const [e, s, v] = btn.closest("[data-b]").dataset.b.split("/");
+        await api(`/events/${e}/sessions/${s}/bookings/${v}/${act === "b-approve" ? "approve" : "reject"}`, { method: "POST", body: {} });
+        toast(act === "b-approve" ? "Venue approved." : "Venue request rejected.");
+      }
+      load();
+    } catch (e) { fail(e); btn.disabled = false; }
+  });
+  load();
+})();
+</script>
+</body>
+</html>

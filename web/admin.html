@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard · SPIT Events</title>
+<link rel="stylesheet" href="css/bauhaus.css">
+</head>
+<body>
+<main>
+  <div class="page-title"><div class="wrap"><div>
+    <p class="eyebrow"><span class="shape s-ink"></span>Council · Admin</p><h1>Dashboard</h1></div></div></div>
+
+  <div class="tabs"><div class="wrap" role="tablist" id="tabs">
+    <button role="tab" data-tab="t-over" aria-selected="true">Overview</button>
+    <button role="tab" data-tab="t-alerts" aria-selected="false">Alerts <span class="count hidden" id="n-alerts">0</span></button>
+    <button role="tab" data-tab="t-log" aria-selected="false">Activity</button>
+    <button role="tab" data-tab="t-users" aria-selected="false">Accounts</button>
+    <button role="tab" data-tab="t-committees" aria-selected="false">Committees</button>
+    <button role="tab" data-tab="t-venues" aria-selected="false">Venues <span class="count hidden" id="n-flagged">0</span></button></div></div>
+
+  <section class="wrap section" style="padding-top:32px">
+    <div id="t-over"><div class="loading">Loading</div></div>
+    <div id="t-alerts" class="hidden"></div>
+    <div id="t-log" class="hidden"></div>
+    <div id="t-users" class="hidden"></div>
+    <div id="t-committees" class="hidden"></div>
+    <div id="t-venues" class="hidden"></div>
+  </section>
+</main>
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  const { $, $$, esc, api, fmt, shapeEl, toast, fail } = App;
+  const me = await App.boot("admin", { require: "approver" });
+  const loaders = { "t-over": overview, "t-alerts": alerts, "t-log": activity, "t-users": users, "t-committees": clubs, "t-venues": venues };
+  const show = App.tabs(document, (name) => { loaders[name](); });
+  const N = (v) => Number(v || 0);
+  const safe = async (p, fallback) => { try { return await p; } catch (e) { fail(e); return fallback; } };
+
+  /* ---------- overview ---------- */
+  async function overview() {
+    const [health, fill, trend, fin, pending, open] = await Promise.all([
+      safe(api("/admin/health"), []), safe(api("/admin/fill-rate"), []), safe(api("/admin/trend"), []),
+      safe(api("/admin/finance"), []), safe(api("/approvals/pending"), { events: [], venue_bookings: [] }), safe(api("/admin/alerts"), []),
+    ]);
+    setAlertCount(open.length);
+    const count = (t) => N((health.find((h) => h.table_name === t) || {}).row_count);
+    const income = fin.reduce((a, f) => a + N(f.registration_income), 0);
+    const days = trend.slice(0, 14).reverse();
+    const maxReg = Math.max(1, ...days.map((d) => N(d.registrations)));
+
+    $("#t-over").innerHTML = `
+      <div class="stats">
+        <div class="stat c-yellow"><b>${count("event")}</b><span>Events</span></div>
+        <div class="stat c-blue"><b>${count("registration")}</b><span>Registrations</span></div>
+        <div class="stat c-red"><b>${pending.events.length + pending.venue_bookings.length}</b><span>Awaiting approval</span></div>
+        <div class="stat c-white"><b>${count("student")}</b><span>Students</span></div>
+        <div class="stat c-ink"><b>${fmt.moneyPlain(income)}</b><span>Fees collected</span></div>
+      </div>
+
+      <div class="grid g2" style="margin-top:32px">
+        <div class="panel"><header class="blue"><h4>Seats filled</h4></header><div class="pad bars">
+          ${fill.length ? fill.map((f) => `<div class="bar-row"><span>${esc(f.title)}</span>
+            <div class="meter ${N(f.fill_percent) < 90 ? "ok" : ""}"><i style="width:${Math.min(100, N(f.fill_percent))}%"></i></div>
+            <span class="num">${N(f.fill_percent)}%</span></div>`).join("") : `<p class="muted">No approved events yet.</p>`}
+        </div></div>
+
+        <div class="panel"><header class="red"><h4>Registrations per day</h4></header><div class="pad">
+          ${days.length ? `<div class="spark" role="img" aria-label="Registrations per day, last ${days.length} days">${days.map((d) =>
+            `<div title="${fmt.dateLong(d.reg_day)}: ${N(d.registrations)} registrations, ${N(d.cancelled)} cancelled" style="height:${Math.max(4, (N(d.registrations) / maxReg) * 100)}%"></div>`).join("")}</div>
+            <div class="spark-label"><span>${fmt.dateLong(days[0].reg_day)}</span><span>${fmt.dateLong(days[days.length - 1].reg_day)}</span></div>`
+            : `<p class="muted">No registrations yet.</p>`}
+        </div></div>
+      </div>
+
+      <h2 style="margin:40px 0 16px">Money per event</h2>
+      <div class="table-wrap"><table><thead><tr><th>Event</th><th class="num">Fees collected</th></tr></thead><tbody>
+        ${fin.map((f) => `<tr><td>${esc(f.title)}</td><td class="num">${fmt.moneyPlain(f.registration_income)}</td></tr>`).join("") || `<tr><td colspan="2" class="muted">Nothing yet.</td></tr>`}
+      </tbody></table></div>
+      <p class="hint">Fees collected stays at ₹0 while no payment gateway is connected.</p>
+
+      <details style="margin-top:32px"><summary>Rows in every table</summary>
+        <div class="pad" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px 24px">
+        ${health.map((h) => `<div class="flex sp"><span>${esc(h.table_name)}</span><strong>${N(h.row_count)}</strong></div>`).join("")}</div></details>`;
+  }
+
+  /* ---------- alerts ---------- */
+  function setAlertCount(n) { const c = $("#n-alerts"); c.textContent = n; c.classList.toggle("hidden", !n); }
+  async function alerts() {
+    const rows = await safe(api("/admin/alerts"), []);
+    setAlertCount(rows.length);
+    const sev = { CRITICAL: "red", WARNING: "yellow", INFO: "blue" };
+    $("#t-alerts").innerHTML = rows.length ? rows.map((a) => `
+      <article class="item"><span class="bar" style="background:var(--${sev[a.severity] || "ink"})"></span>
+        <div><div class="flex"><span class="chip ${sev[a.severity] || ""}">${esc(a.severity)}</span><span class="upper muted">${esc(a.alert_type)} · ${fmt.stamp(a.created_at)}</span></div>
+          <p style="margin-top:8px;font-weight:700">${esc(a.message)}</p></div>
+        <div class="actions"><button class="btn small" data-resolve="${a.alert_id}" type="button">Resolve</button></div></article>`).join("")
+      : `<div class="empty">${shapeEl("circle", "s-blue lg")}<h2>No open alerts</h2></div>`;
+  }
+  $("#t-alerts").addEventListener("click", async (ev) => {
+    const b = ev.target.closest("[data-resolve]"); if (!b) return;
+    b.disabled = true;
+    try { await api(`/admin/alerts/${b.dataset.resolve}/resolve`, { method: "POST", body: {} }); toast("Alert resolved."); alerts(); }
+    catch (e) { fail(e); b.disabled = false; }
+  });
+
+  /* ---------- activity ---------- */
+  async function activity() {
+    const rows = await safe(api("/admin/activity"), []);
+    const col = { INSERT: "blue", UPDATE: "yellow", DELETE: "red" };
+    $("#t-log").innerHTML = `<p class="hint" style="margin:0 0 12px">Every change to the main tables in the last 24 hours, newest first.</p>
+      <div class="table-wrap"><table><thead><tr><th>When</th><th>Table</th><th>Action</th><th>Record</th><th>Data</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td style="white-space:nowrap">${fmt.stamp(r.changed_at)}</td><td>${esc(r.table_name)}</td>
+        <td><span class="chip ${col[r.action_type] || ""}">${esc(r.action_type)}</span></td><td>${esc(r.record_key)}</td>
+        <td><details><summary>View</summary><pre>${esc(JSON.stringify({ old: r.old_data, new: r.new_data }, null, 2))}</pre></details></td></tr>`).join("")
+        || `<tr><td colspan="5" class="muted">Nothing in the last 24 hours.</td></tr>`}</tbody></table></div>`;
+  }
+
+  /* ---------- accounts ---------- */
+  // Council can hand out up to council; only admins make admins. Permanent admins are locked for everyone.
+  const ROLES = ["student", "committee", "council", "admin"];
+  const grantable = me.role === "admin" ? ROLES : ["student", "committee", "council"];
+  let committees = [], accounts = [];
+  const locked = (u) => u.is_permanent || (u.role === "admin" && me.role !== "admin");
+  function userRow(u) {
+    const lock = locked(u);
+    const roles = ROLES.filter((r) => r === u.role || grantable.includes(r));
+    return `<tr data-id="${u.id}"><td><strong>${esc(u.name)}</strong><br><span class="muted">${esc(u.email)}</span></td>
+      <td><select data-f="role" aria-label="Role for ${esc(u.name)}" ${lock ? "disabled" : ""}>${roles.map((r) => `<option ${r === u.role ? "selected" : ""}>${r}</option>`).join("")}</select>
+        <select data-f="committee" aria-label="Committee for ${esc(u.name)}" class="${u.role === "committee" ? "" : "hidden"}" style="margin-top:6px" ${lock ? "disabled" : ""}>
+          <option value="">Pick committee…</option>${committees.map((c) => `<option value="${c.committee_id}" ${c.committee_id === u.committee ? "selected" : ""}>${esc(c.committee)}</option>`).join("")}</select></td>
+      <td><input type="checkbox" data-f="is_active" aria-label="Active" ${u.is_active ? "checked" : ""} ${lock ? "disabled" : ""}></td>
+      <td>${u.is_permanent ? `<span class="chip ink">${u.is_root ? "Root" : "Permanent"}</span>`
+        : me.is_root && u.role === "admin" ? `<button class="btn small ghost" data-perm type="button">Make permanent</button>` : `<span class="muted">—</span>`}</td></tr>`;
+  }
+  function drawUsers() {
+    const q = ($("#u-q") ? $("#u-q").value : "").trim().toLowerCase();
+    const rows = accounts.filter((u) => !q || (u.name + " " + u.email + " " + u.role).toLowerCase().includes(q));
+    $("#u-body").innerHTML = rows.map(userRow).join("") || `<tr><td colspan="4" class="muted">No matching accounts.</td></tr>`;
+  }
+  async function users() {
+    [accounts, committees] = await Promise.all([safe(api("/admin/users"), []), committees.length ? committees : safe(api("/committees"), [])]);
+    $("#t-users").innerHTML = `
+      <div class="split">
+        <div><div class="field"><label for="u-q">Search</label><input id="u-q" placeholder="Name, email or role"></div>
+        <div class="table-wrap"><table><thead><tr><th>Person</th><th>Role</th><th>Active</th><th>Permanent</th></tr></thead><tbody id="u-body"></tbody></table></div></div>
+        <aside class="stack">
+          <div class="note">New accounts sign up themselves with an @spit.ac.in email and start as <strong>student</strong>.</div>
+          <div class="note blue"><strong>Committee</strong> = a committee's own account (e.g. ecell@spit.ac.in). It posts events and requests venues for that committee only.</div>
+          <div class="note">${me.role === "admin" ? "Admins can give any role." : "Council can give student, committee or council."} Permanent admins can't be changed by anyone${me.is_root ? "; only you can make one." : "."}</div>
+        </aside>
+      </div>`;
+    drawUsers();
+  }
+  const patchUser = async (id, body) => {
+    try { await api("/admin/users/" + id, { method: "PATCH", body }); toast("Saved."); }
+    catch (e) { fail(e); }
+    users();
+  };
+  $("#t-users").addEventListener("input", (ev) => { if (ev.target.id === "u-q") drawUsers(); });
+  $("#t-users").addEventListener("change", async (ev) => {
+    const el = ev.target.closest("[data-f]"); if (!el) return;
+    const tr = el.closest("tr"), id = tr.dataset.id, f = el.dataset.f;
+    if (f === "role" && el.value === "committee") {
+      // Needs a committee before it can be saved.
+      const pick = tr.querySelector('[data-f="committee"]'); pick.classList.remove("hidden"); pick.focus();
+      if (!pick.value) return toast("Now pick which committee this account posts for.");
+      return patchUser(id, { role: "committee", committee: Number(pick.value) });
+    }
+    if (f === "committee") { if (el.value) patchUser(id, { role: "committee", committee: Number(el.value) }); return; }
+    patchUser(id, { [f]: el.type === "checkbox" ? el.checked : el.value });
+  });
+  $("#t-users").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-perm]"); if (!b) return;
+    const name = b.closest("tr").querySelector("strong").textContent;
+    if (!confirm(`Make ${name} a PERMANENT admin? Nobody, including you, can undo this.`)) return;
+    patchUser(b.closest("tr").dataset.id, { is_permanent: true });
+  });
+
+  /* ---------- committees ---------- */
+  let clubRows = [];
+  async function clubs() {
+    clubRows = await safe(api("/committees"), []);
+    committees = clubRows;   // the accounts tab's committee picker
+    $("#t-committees").innerHTML = `
+      <div class="split">
+        <div class="table-wrap"><table><thead><tr><th>Committee</th><th>Coordinator</th><th class="num">Members</th><th class="num">Events</th><th></th></tr></thead><tbody>
+          ${clubRows.map((c) => `<tr data-c="${c.committee_id}"><td><strong>${esc(c.committee)}</strong><br><span class="muted">${esc(c.email)}${c.founded_year ? " · since " + esc(c.founded_year) : ""}</span></td>
+            <td>${c.coordinator_name ? `${esc(c.coordinator_name)}<br><span class="muted">${esc(c.coordinator_email || "")}</span>` : `<span class="muted">Not set</span>`}</td>
+            <td class="num">${N(c.members)}</td><td class="num">${N(c.events_organized)}</td>
+            <td><div class="flex"><button class="btn small ghost" data-cedit type="button">Edit</button>
+              ${N(c.events_organized) ? "" : `<button class="btn small red" data-cdel type="button">Delete</button>`}</div></td></tr>`).join("")
+            || `<tr><td colspan="5" class="muted">No committees yet.</td></tr>`}
+        </tbody></table></div>
+        <form class="panel" id="club-form" novalidate><header class="yellow"><h4 id="cf-title">Add committee</h4></header><div class="pad">
+          <input type="hidden" id="cf-id">
+          <div class="field"><label for="cf-name">Name</label><input id="cf-name" maxlength="80"></div>
+          <div class="field"><label for="cf-email">Committee email</label><input id="cf-email" type="email" maxlength="100" placeholder="club@spit.ac.in"></div>
+          <div class="field"><label for="cf-year">Founded (year)</label><input id="cf-year" type="number" min="1901" max="2155"></div>
+          <div class="field"><label for="cf-cname">Coordinator name</label><input id="cf-cname" maxlength="80"></div>
+          <div class="field"><label for="cf-cemail">Coordinator email</label><input id="cf-cemail" type="email" maxlength="100"></div>
+          <button class="btn block" type="submit" id="cf-go">Add committee</button>
+          <button class="btn block ghost hidden" type="button" id="cf-cancel" style="margin-top:10px">Cancel edit</button>
+          <p class="hint">To let a committee post events, have it sign up with its email, then set that account's role to committee under Accounts.</p></div></form>
+      </div>`;
+  }
+  function clubForm(c) {
+    $("#cf-id").value = c ? c.committee_id : "";
+    $("#cf-name").value = c ? c.committee : ""; $("#cf-email").value = c ? c.email : "";
+    $("#cf-year").value = c && c.founded_year ? c.founded_year : "";
+    $("#cf-cname").value = c ? c.coordinator_name || "" : ""; $("#cf-cemail").value = c ? c.coordinator_email || "" : "";
+    $("#cf-title").textContent = c ? "Edit " + c.committee : "Add committee";
+    $("#cf-go").textContent = c ? "Save changes" : "Add committee";
+    $("#cf-cancel").classList.toggle("hidden", !c);
+  }
+  $("#t-committees").addEventListener("click", async (ev) => {
+    if (ev.target.id === "cf-cancel") return clubForm(null);
+    const row = ev.target.closest("[data-c]"); if (!row) return;
+    const c = clubRows.find((x) => String(x.committee_id) === row.dataset.c);
+    if (ev.target.closest("[data-cedit]")) { clubForm(c); $("#cf-name").focus(); return; }
+    if (ev.target.closest("[data-cdel]")) {
+      if (!confirm(`Delete ${c.committee}? Its member list goes too.`)) return;
+      try { await api("/committees/" + c.committee_id, { method: "DELETE" }); toast("Committee deleted."); clubs(); }
+      catch (e) { fail(e); }
+    }
+  });
+  $("#t-committees").addEventListener("submit", async (ev) => {
+    if (ev.target.id !== "club-form") return;
+    ev.preventDefault();
+    const id = $("#cf-id").value, year = $("#cf-year").value;
+    const body = { name: $("#cf-name").value.trim(), email: $("#cf-email").value.trim(), founded_year: year ? Number(year) : null,
+      coordinator_name: $("#cf-cname").value.trim(), coordinator_email: $("#cf-cemail").value.trim() };
+    if (!body.name || !body.email) return toast("Name and committee email are required.", "err");
+    try {
+      await api(id ? "/committees/" + id : "/committees", { method: id ? "PATCH" : "POST", body });
+      toast(id ? "Committee saved." : "Committee added."); clubs();
+    } catch (e) { fail(e); }
+  });
+
+  /* ---------- venues ---------- */
+  async function venues() {
+    const rows = await safe(api("/venues?all=1"), []);
+    const flagged = rows.reduce((a, v) => a + N(v.flagged), 0);
+    const c = $("#n-flagged"); c.textContent = flagged; c.classList.toggle("hidden", !flagged);
+    $("#t-venues").innerHTML = `
+      <div class="split">
+        <div class="table-wrap"><table><thead><tr><th>Venue</th><th class="num">Seats</th><th>Status</th><th></th></tr></thead><tbody>
+          ${rows.map((v) => `<tr data-v="${v.venue_id}"><td><strong>${esc(v.venue_name)}</strong><br><span class="muted">${esc(v.location || "")}</span>
+              ${N(v.flagged) ? `<br><a href="approvals.html#flagged" class="chip red">${N(v.flagged)} booking${N(v.flagged) > 1 ? "s" : ""} to decide</a>` : ""}</td>
+            <td class="num">${N(v.capacity)}</td><td>${App.statusChip(v.status)}</td>
+            <td><div class="flex">${v.status === "Active"
+              ? `<button class="btn small yellow" data-vs="Suspended" type="button">Suspend</button>`
+              : `<button class="btn small blue" data-vs="Active" type="button">${v.status === "Removed" ? "Restore" : "Reactivate"}</button>`}
+              ${v.status !== "Removed" ? `<button class="btn small red" data-vs="Removed" type="button">Remove</button>` : ""}</div></td></tr>`).join("")
+            || `<tr><td colspan="4" class="muted">No venues yet.</td></tr>`}
+        </tbody></table></div>
+        <aside class="stack">
+          <form class="panel" id="new-venue" novalidate><header class="yellow"><h4>Add venue</h4></header><div class="pad">
+            <div class="field"><label for="nv-name">Name</label><input id="nv-name" maxlength="80"></div>
+            <div class="field"><label for="nv-cap">Seats</label><input id="nv-cap" type="number" min="1" value="60"></div>
+            <div class="field"><label for="nv-loc">Location</label><input id="nv-loc" maxlength="80" placeholder="e.g. SPIT Campus, 3rd floor"></div>
+            <button class="btn block" type="submit">Add venue</button></div></form>
+          <div class="note">Suspending or removing a venue flags its upcoming bookings. Keep or cancel each one under <a href="approvals.html#flagged">Approvals → Flagged</a>.</div>
+        </aside>
+      </div>`;
+  }
+  $("#t-venues").addEventListener("click", async (ev) => {
+    const b = ev.target.closest("[data-vs]"); if (!b) return;
+    const id = b.closest("tr").dataset.v, to = b.dataset.vs;
+    if (to === "Removed" && !confirm("Remove this venue? Committees won't be able to request it. Its upcoming bookings get flagged.")) return;
+    b.disabled = true;
+    try {
+      const v = await api("/venues/" + id, { method: "PATCH", body: { status: to } });
+      toast(`${v.venue_name}: ${v.status}.` + (N(v.flagged) ? ` ${N(v.flagged)} booking(s) flagged for a decision.` : ""));
+    } catch (e) { fail(e); }
+    venues();
+  });
+  $("#t-venues").addEventListener("submit", async (ev) => {
+    if (ev.target.id !== "new-venue") return;
+    ev.preventDefault();
+    const venue_name = $("#nv-name").value.trim(), capacity = Number($("#nv-cap").value), location = $("#nv-loc").value.trim();
+    if (!venue_name) return toast("Give the venue a name.", "err");
+    if (!(capacity >= 1)) return toast("Seats must be at least 1.", "err");
+    try { await api("/venues", { method: "POST", body: { venue_name, capacity, location } }); toast("Venue added."); venues(); }
+    catch (e) { fail(e); }
+  });
+
+  show("t-over");
+})();
+</script>
+</body>
+</html>

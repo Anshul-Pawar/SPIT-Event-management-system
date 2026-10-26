@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event · SPIT Events</title>
+<link rel="stylesheet" href="css/bauhaus.css">
+</head>
+<body>
+<main><div class="wrap"><div class="loading">Loading event</div></div></main>
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  const { $, esc, api, fmt, catStyle, shapeEl, statusChip, toast, fail, Session } = App;
+  const user = await App.boot("events");
+  const id = new URLSearchParams(location.search).get("id");
+  const main = $("main");
+
+  let ev;
+  try { ev = await api("/events/" + encodeURIComponent(id)); }
+  catch (e) {
+    main.innerHTML = `<div class="wrap section"><div class="empty">${shapeEl("tri", "s-red lg")}<h2>Event not found</h2><p class="muted" style="margin-top:10px">It may not be approved yet, or the link is wrong.</p><p style="margin-top:20px"><a class="btn" href="index.html">All events</a></p></div></div>`;
+    return;
+  }
+  document.title = ev.title + " · SPIT Events";
+
+  const st = catStyle(ev.category);
+  const first = (ev.sessions || [])[0];
+  const left = Number(ev.seats_left), taken = Number(ev.seats_taken), max = Number(ev.max_seats);
+  const pct = max ? Math.min(100, Math.round((taken / max) * 100)) : 0;
+
+  async function myReg() {
+    if (!Session.isStudent) return null;
+    try { return (await api("/me/registrations/full")).find((r) => String(r.event_id) === String(ev.event_id)) || null; }
+    catch { return null; }
+  }
+
+  function sessionHtml(s) {
+    const bookings = (s.venue_name ? [{ venue_name: s.venue_name, status: s.booking_status }] : []);
+    const venue = bookings.length
+      ? bookings.map((b) => `<span class="venue-line"><strong>${esc(b.venue_name)}</strong> ${statusChip(b.status)}</span>`).join("")
+      : `<span class="muted">Venue not requested yet</span>`;
+    return `<div class="session"><div class="no"><b>${esc(s.session_no)}</b><span>SESSION</span></div>
+      <div class="info"><h3>${esc(s.title)}</h3>
+      <p class="when">${fmt.dateLong(s.session_date)} · ${fmt.time(s.start_time)}–${fmt.time(s.end_time)}</p>${venue}</div></div>`;
+  }
+
+  async function paint() {
+    const reg = await myReg();
+    const closed = fmt.isPast(ev.reg_deadline);
+    let panel;
+    if (ev.approval_status !== "Approved") {
+      panel = `<div class="note">${esc(ev.approval_status)}: registration opens once an approver clears this event.</div>`;
+    } else if (!user && closed) {
+      panel = `<div class="note red">Registration closed on ${fmt.dateLong(ev.reg_deadline)}.</div>`;
+    } else if (!user && left <= 0) {
+      panel = `<div class="note red">This event is full.</div>`;
+    } else if (!user) {
+      panel = `<p style="margin-bottom:16px">Log in with your SPIT account to register.</p>
+        <a class="btn block" href="login.html?next=${encodeURIComponent("event.html?id=" + ev.event_id)}">Log in to register</a>`;
+    } else if (!Session.isStudent) {
+      panel = `<div class="note">Only students can register for events.</div>`;
+    } else if (reg && reg.status === "Registered") {
+      panel = `<div class="note blue" style="margin-bottom:16px">You are registered.</div>
+        ${Number(ev.fee) > 0 ? `<p class="muted" style="margin-bottom:16px">Fee ${fmt.moneyPlain(ev.fee)} · online payment is not switched on yet, so nothing was charged. Pay the committee at the event.</p>` : ""}
+        <button class="btn ghost block" id="cancel" type="button">Cancel registration</button>`;
+    } else if (closed) {
+      panel = `<div class="note red">Registration closed on ${fmt.dateLong(ev.reg_deadline)}.</div>`;
+    } else if (left <= 0) {
+      panel = `<div class="note red">This event is full.</div>`;
+    } else {
+      panel = `${reg && reg.status === "Cancelled" ? `<p class="muted" style="margin-bottom:12px">You cancelled earlier. Registering again is not possible for the same event.</p>` : ""}
+        <button class="btn ${reg ? "" : "red"} block" id="reg" type="button" ${reg ? "disabled" : ""}>Register · ${fmt.money(ev.fee)}</button>
+        <p class="hint">Closes ${fmt.dateLong(ev.reg_deadline)}</p>`;
+    }
+
+    main.innerHTML = `
+    <section class="detail-head c-${st.c}">
+      <div class="wrap">
+        <div>
+          <p class="eyebrow">${shapeEl(st.shape, st.c === "white" ? "s-ink" : "")}<span>${esc(ev.category)} · ${esc(ev.committee)}</span></p>
+          <h1>${esc(ev.title)}</h1>
+        </div>
+        <div class="date-block"><b>${fmt.day(first && first.session_date)}</b><span class="upper">${fmt.mon(first && first.session_date)} ${first ? fmt.parseDate(first.session_date).getFullYear() : ""}</span></div>
+      </div>
+    </section>
+    <section class="wrap section">
+      <div class="split">
+        <div>
+          <h2 style="margin-bottom:18px">Schedule</h2>
+          ${(ev.sessions || []).map(sessionHtml).join("") || `<p class="muted">No sessions added.</p>`}
+        </div>
+        <aside class="stack">
+          <div class="panel">
+            <header class="${Number(ev.fee) > 0 ? "yellow" : "blue"}"><h4>Registration</h4><span class="price" style="font-weight:800;font-size:1.4rem">${fmt.money(ev.fee)}</span></header>
+            <div class="pad">${panel}</div>
+          </div>
+          <dl class="facts" style="margin:0">
+            <div><dt>Seats left</dt><dd>${Math.max(left, 0)}</dd></div>
+            <div><dt>Capacity</dt><dd>${max}</dd></div>
+            <div><dt>Closes</dt><dd>${fmt.dateLong(ev.reg_deadline)}</dd></div>
+            <div><dt>Committee</dt><dd style="font-size:1rem">${esc(ev.committee)}</dd></div>
+          </dl>
+          <div><div class="meter ${pct < 90 ? "ok" : ""}" role="img" aria-label="${pct} percent full"><i style="width:${pct}%"></i></div>
+          <p class="hint upper">${pct}% full</p></div>
+        </aside>
+      </div>
+    </section>`;
+
+    const r = $("#reg"), c = $("#cancel");
+    if (r) r.addEventListener("click", async () => {
+      r.disabled = true;
+      try {
+        await api(`/events/${ev.event_id}/register`, { method: "POST" });
+        toast("You are registered for " + ev.title + ".");
+        ev = await api("/events/" + ev.event_id);
+      } catch (e) { fail(e); }
+      paint();
+    });
+    if (c) c.addEventListener("click", async () => {
+      if (!confirm("Cancel your registration for " + ev.title + "?")) return;
+      c.disabled = true;
+      try {
+        await api(`/events/${ev.event_id}/register`, { method: "DELETE" });
+        toast("Registration cancelled.");
+        ev = await api("/events/" + ev.event_id);
+      } catch (e) { fail(e); }
+      paint();
+    });
+  }
+  paint();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in · SPIT Events</title>
+<link rel="stylesheet" href="css/bauhaus.css">
+</head>
+<body>
+<main class="login-wrap">
+  <div class="login-art" aria-hidden="true"><div class="c1"></div><div class="c2"></div><div class="c3"></div></div>
+  <form class="login-form" id="form" novalidate>
+    <h1 id="head">Log<br>in.</h1>
+    <div class="field"><label for="email">SPIT email</label><input id="email" type="email" autocomplete="username" placeholder="you@spit.ac.in" required></div>
+    <div class="field"><label for="password">Password <span class="muted" id="pw-hint"></span></label><input id="password" type="password" autocomplete="current-password" required></div>
+    <button class="btn block" id="go" type="submit">Enter</button>
+    <p class="hint" style="margin-top:18px" id="switch-line">No account yet? <a href="#" id="switch">Sign up</a> with your @spit.ac.in email.</p>
+    <p style="margin-top:18px"><a href="index.html" class="upper">← Browse events</a></p>
+  </form>
+</main>
+<script src="js/app.js"></script>
+<script>
+(() => {
+  const { $, api, Session, toast, fail } = App;
+  const next = new URLSearchParams(location.search).get("next") || "index.html";
+  // Only allow a plain page name from ?next so the login can't bounce people to another site.
+  const safeNext = /^[a-z0-9_-]+\.html(\?[\w=&%.-]*)?$/i.test(next) ? next : "index.html";
+  if (Session.token) location.replace(safeNext);
+  let signup = location.hash === "#signup";
+  function mode() {
+    $("#head").innerHTML = signup ? "Sign<br>up." : "Log<br>in.";
+    $("#go").textContent = signup ? "Create account" : "Enter";
+    $("#pw-hint").textContent = signup ? "(8+ characters)" : "";
+    $("#password").autocomplete = signup ? "new-password" : "current-password";
+    $("#switch-line").innerHTML = signup
+      ? `Already have an account? <a href="#" id="switch">Log in</a>.<br>New accounts are students. The council or an admin can give you more access.`
+      : `No account yet? <a href="#" id="switch">Sign up</a> with your @spit.ac.in email.`;
+    $("#switch").addEventListener("click", (e) => { e.preventDefault(); signup = !signup; mode(); });
+  }
+  mode();
+  $("#form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const email = $("#email").value.trim().toLowerCase(), password = $("#password").value;
+    if (!email || !password) return toast("Enter your email and password.", "err");
+    if (!email.endsWith("@spit.ac.in")) return toast("Use your @spit.ac.in email.", "err");
+    if (signup && password.length < 8) return toast("Password needs at least 8 characters.", "err");
+    const btn = $("#go"); btn.disabled = true;
+    try {
+      const r = await api(signup ? "/auth/signup" : "/auth/login", { method: "POST", body: { email, password } });
+      Session.set(r.token, r.user);
+      location.href = safeNext;
+    } catch (e) { fail(e); btn.disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>

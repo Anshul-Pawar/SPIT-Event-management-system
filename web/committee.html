@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Committee · SPIT Events</title>
+<link rel="stylesheet" href="css/bauhaus.css">
+</head>
+<body>
+<main>
+  <div class="page-title"><div class="wrap"><div>
+    <p class="eyebrow"><span class="shape s-yellow"></span><span id="who">Committee</span></p><h1>Your events</h1></div>
+    <button class="btn red" id="new-top" type="button">+ New event</button></div></div>
+
+  <div class="tabs"><div class="wrap" role="tablist" id="tabs">
+    <button role="tab" data-tab="t-mine" aria-selected="true">My events <span class="count" id="n">0</span></button>
+    <button role="tab" data-tab="t-new" aria-selected="false">New event</button>
+    <button role="tab" data-tab="t-info" aria-selected="false">Coordinator</button></div></div>
+
+  <section class="wrap section" style="padding-top:32px">
+    <div id="t-mine"><div class="loading">Loading</div></div>
+
+    <form id="t-info" class="hidden" novalidate style="max-width:520px">
+      <div class="panel"><header class="blue"><h4>Faculty coordinator</h4></header><div class="pad">
+        <div class="field"><label for="co-name">Name</label><input id="co-name" maxlength="80"></div>
+        <div class="field"><label for="co-email">Email</label><input id="co-email" type="email" maxlength="100"></div>
+        <button class="btn block" type="submit">Save</button>
+        <p class="hint">Shown on your committee's public page. The council or an admin edits everything else.</p></div></div>
+    </form>
+
+    <form id="t-new" class="hidden" novalidate>
+      <div class="split">
+        <div class="stack">
+          <div class="panel"><header class="yellow"><h4>1 · The event</h4></header><div class="pad">
+            <div class="field"><label for="title">Title</label><input id="title" maxlength="120" required></div>
+            <div class="row">
+              <div class="field"><label for="cat">Category</label><select id="cat"></select></div>
+              <div class="field"><label for="fee">Fee (₹)</label><input id="fee" type="number" min="0" step="0.01" value="0"></div>
+              <div class="field"><label for="seats">Seats</label><input id="seats" type="number" min="1" value="50"></div>
+              <div class="field"><label for="deadline">Registration closes</label><input id="deadline" type="date"></div>
+            </div>
+            <p class="hint">Sessions must happen on or after the closing date.</p>
+          </div></div>
+          <div class="panel"><header class="blue"><h4>2 · Sessions</h4><button type="button" class="btn yellow small" id="add-session">+ Add session</button></header>
+            <div class="pad" id="sessions"></div></div>
+        </div>
+        <aside class="stack">
+          <div class="note">New events start as <strong>Pending</strong>. The student council approves them, then students can register.</div>
+          <div class="note blue">After submitting, request a venue for each session from “My events”.</div>
+          <button class="btn red block" id="submit" type="submit">Submit for approval</button>
+        </aside>
+      </div>
+    </form>
+  </section>
+</main>
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  const { $, $$, esc, api, fmt, shapeEl, statusChip, catStyle, toast, fail } = App;
+  const user = await App.boot("committee", { require: "committee" });
+  const show = App.tabs(document, (name) => { if (name === "t-mine") load(); if (name === "t-info") loadInfo(); });
+  const cid = user.committees[0].committee_id;
+  async function loadInfo() {
+    try { const c = await api("/committees/" + cid); $("#co-name").value = c.coordinator_name || ""; $("#co-email").value = c.coordinator_email || ""; }
+    catch (e) { fail(e); }
+  }
+  $("#t-info").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("/committees/" + cid, { method: "PATCH", body: { coordinator_name: $("#co-name").value.trim(), coordinator_email: $("#co-email").value.trim() } });
+      toast("Saved.");
+    } catch (e) { fail(e); }
+  });
+  $("#new-top").addEventListener("click", () => show("t-new"));
+  $("#who").textContent = user.committees.map((c) => c.name).join(" · ");
+
+  let venues = [], cats = [];
+  try { [venues, cats] = await Promise.all([api("/venues"), api("/categories")]); } catch (e) { fail(e); }
+
+  /* ---------- my events ---------- */
+  async function load() {
+    const box = $("#t-mine");
+    let rows = [];
+    try { rows = await api("/me/events"); } catch (e) { fail(e); box.innerHTML = ""; return; }
+    $("#n").textContent = rows.length;
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">${shapeEl("circle", "s-yellow lg")}<h2>No events yet</h2><p class="muted" style="margin:10px 0 20px">Propose your first event.</p><button class="btn red" id="first" type="button">+ New event</button></div>`;
+      $("#first").addEventListener("click", () => show("t-new"));
+      return;
+    }
+    const venueOpts = venues.map((v) => `<option value="${v.venue_id}">${esc(v.venue_name)} · ${v.capacity} seats</option>`).join("");
+    box.innerHTML = rows.map((e) => {
+      const hdr = { Approved: "blue", Pending: "yellow", Rejected: "red" }[e.approval_status] || "";
+      return `<article class="panel" style="margin-bottom:24px">
+        <header class="${hdr}"><h3>${esc(e.title)}</h3>${statusChip(e.approval_status)}</header>
+        <div class="pad">
+          <div class="flex" style="gap:28px;margin-bottom:${e.approval_remarks ? 14 : 20}px">
+            <div><h4 class="muted">Committee</h4><b>${esc(e.committee)}</b></div>
+            <div><h4 class="muted">Category</h4><b>${esc(e.category)}</b></div>
+            <div><h4 class="muted">Fee</h4><b>${fmt.money(e.fee)}</b></div>
+            <div><h4 class="muted">Registered</h4><b>${e.seats_taken} / ${e.max_seats}</b></div>
+            <div><h4 class="muted">Closes</h4><b>${fmt.dateLong(e.reg_deadline)}</b></div>
+          </div>
+          ${e.approval_remarks ? `<div class="note ${e.approval_status === "Rejected" ? "red" : ""}" style="margin-bottom:20px">Approver: ${esc(e.approval_remarks)}</div>` : ""}
+          ${e.sessions.map((s) => `
+            <div class="session" data-event="${e.event_id}" data-session="${s.session_no}" data-date="${esc(s.session_date)}">
+              <div class="no"><b>${s.session_no}</b><span>SESSION</span></div>
+              <div class="info"><h3>${esc(s.title)}</h3>
+                <p class="when">${fmt.dateLong(s.session_date)} · ${fmt.time(s.start_time)}–${fmt.time(s.end_time)}</p>
+                <div class="venue-line">${s.bookings.length ? s.bookings.map((b) => `<strong>${esc(b.venue_name)}</strong> ${statusChip(b.status)}`).join(" ") : `<span class="muted">No venue requested</span>`}</div>
+                ${e.approval_status === "Rejected" ? "" : `
+                <div class="flex" style="margin-top:6px"><select class="venue-pick" aria-label="Venue for session ${s.session_no}" style="max-width:320px"><option value="">Choose a venue…</option>${venueOpts}</select>
+                  <button class="btn small blue" data-request type="button">Request venue</button></div>
+                <p class="hint avail"></p>`}
+              </div></div>`).join("")}
+          <p class="hint">Approving a venue is only possible once the event itself is approved.</p>
+        </div></article>`;
+    }).join("");
+  }
+
+  $("#t-mine").addEventListener("change", async (ev) => {
+    const sel = ev.target.closest(".venue-pick"); if (!sel) return;
+    const sess = sel.closest(".session"), out = sess.querySelector(".avail");
+    out.textContent = "";
+    if (!sel.value) return;
+    try {
+      const r = await api(`/venues/${sel.value}/availability?date=${encodeURIComponent(String(sess.dataset.date).slice(0, 10))}`);
+      out.textContent = r.bookings.length
+        ? "Already taken that day: " + r.bookings.map((b) => `${fmt.time(b.start_time)}–${fmt.time(b.end_time)} (${b.booking_status})`).join(", ")
+        : "Free all day.";
+    } catch (e) { out.textContent = e.message; }
+  });
+  $("#t-mine").addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-request]"); if (!btn) return;
+    const sess = btn.closest(".session"), pick = sess.querySelector(".venue-pick");
+    if (!pick.value) return toast("Choose a venue first.", "err");
+    btn.disabled = true;
+    try {
+      await api(`/events/${sess.dataset.event}/sessions/${sess.dataset.session}/bookings`, { method: "POST", body: { venue_id: Number(pick.value) } });
+      toast("Venue requested. An approver will review it.");
+      load();
+    } catch (e) { fail(e); btn.disabled = false; }
+  });
+
+  /* ---------- new event ---------- */
+  $("#cat").innerHTML = cats.map((c) => `<option value="${c.cat_id}">${esc(c.cat_name)}</option>`).join("");
+
+  function addSession() {
+    const n = $$("#sessions .sess-row").length + 1;
+    const row = document.createElement("div");
+    row.className = "sess-row";
+    row.style.cssText = "border:3px solid var(--ink);padding:16px;margin-bottom:14px;background:var(--paper)";
+    row.innerHTML = `<div class="flex sp" style="margin-bottom:12px"><h4>Session <span class="sn">${n}</span></h4>
+      <button class="btn small ghost rm" type="button">Remove</button></div>
+      <div class="field"><label>Title</label><input class="s-title" maxlength="100"></div>
+      <div class="row"><div class="field"><label>Date</label><input class="s-date" type="date"></div>
+      <div class="field"><label>Starts</label><input class="s-start" type="time"></div>
+      <div class="field"><label>Ends</label><input class="s-end" type="time"></div></div>`;
+    $("#sessions").appendChild(row);
+  }
+  $("#add-session").addEventListener("click", addSession);
+  $("#sessions").addEventListener("click", (ev) => {
+    const rm = ev.target.closest(".rm"); if (!rm) return;
+    if ($$("#sessions .sess-row").length === 1) return toast("An event needs at least one session.", "err");
+    rm.closest(".sess-row").remove();
+    $$("#sessions .sn").forEach((s, i) => (s.textContent = i + 1));
+  });
+  addSession();
+
+  $("#t-new").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const title = $("#title").value.trim(), deadline = $("#deadline").value;
+    const sessions = $$("#sessions .sess-row").map((r) => ({
+      title: $(".s-title", r).value.trim(), session_date: $(".s-date", r).value,
+      start_time: $(".s-start", r).value, end_time: $(".s-end", r).value,
+    }));
+    if (!title) return toast("Give the event a title.", "err");
+    if (!deadline) return toast("Pick the registration closing date.", "err");
+    if (Number($("#seats").value) < 1) return toast("Seats must be at least 1.", "err");
+    if (Number($("#fee").value) < 0) return toast("Fee can't be negative.", "err");
+    for (const [i, s] of sessions.entries()) {
+      if (!s.title || !s.session_date || !s.start_time || !s.end_time) return toast(`Fill in every field of session ${i + 1}.`, "err");
+      if (s.end_time <= s.start_time) return toast(`Session ${i + 1} must end after it starts.`, "err");
+      if (s.session_date < deadline) return toast(`Session ${i + 1} is before the registration closing date.`, "err");
+    }
+    const btn = $("#submit"); btn.disabled = true;
+    try {
+      await api("/events", { method: "POST", body: {
+        title, cat_id: Number($("#cat").value),
+        fee: Number($("#fee").value || 0).toFixed(2), max_seats: Number($("#seats").value), reg_deadline: deadline, sessions } });
+      toast("Event submitted. It is Pending until an approver clears it.");
+      $("#t-new").reset(); $("#sessions").innerHTML = ""; addSession();
+      show("t-mine");
+    } catch (e) { fail(e); }
+    btn.disabled = false;
+  });
+
+  show("t-mine");
+})();
+</script>
+</body>
+</html>

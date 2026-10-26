@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My tickets · SPIT Events</title>
+<link rel="stylesheet" href="css/bauhaus.css">
+</head>
+<body>
+<main>
+  <div class="page-title"><div class="wrap"><div>
+    <p class="eyebrow"><span class="shape circle s-red"></span>Student</p><h1>My tickets</h1></div>
+    <a class="btn yellow" href="index.html">Find events</a></div></div>
+  <section class="wrap section" style="padding-top:32px"><div id="list"><div class="loading">Loading</div></div></section>
+</main>
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  const { $, esc, api, fmt, statusChip, shapeEl, toast, fail } = App;
+  await App.boot("my", { require: "student" });
+
+  async function load() {
+    let rows = [];
+    try { rows = await api("/me/registrations/full"); } catch (e) { fail(e); }
+    if (!rows.length) {
+      $("#list").innerHTML = `<div class="empty">${shapeEl("", "s-blue lg")}<h2>No tickets yet</h2><p class="muted" style="margin:10px 0 20px">Register for an event and it shows up here.</p><a class="btn red" href="index.html">Browse events</a></div>`;
+      return;
+    }
+    $("#list").innerHTML = rows.map((r) => {
+      const owed = Number(r.fee) > 0 && Number(r.amount_paid) < Number(r.fee) && r.status === "Registered";
+      return `<article class="ticket">
+        <div class="stub"><b>${fmt.day(r.event_date)}</b><span>${fmt.mon(r.event_date)}</span></div>
+        <div class="mid"><h3><a href="event.html?id=${r.event_id}">${esc(r.title)}</a></h3>
+          <p class="upper muted">${esc(r.committee)} · Registered ${fmt.stamp(r.reg_date)}</p></div>
+        <div class="end">${statusChip(r.status)}
+          <span class="upper">${Number(r.fee) > 0 ? (owed ? "Fee due " + fmt.moneyPlain(r.fee) : "Paid " + fmt.moneyPlain(r.amount_paid)) : "Free"}</span>
+          ${r.status === "Registered" ? `<button class="btn small ghost" data-cancel="${r.event_id}" data-title="${esc(r.title)}" type="button">Cancel</button>` : ""}
+        </div></article>`;
+    }).join("");
+  }
+  $("#list").addEventListener("click", async (ev) => {
+    const b = ev.target.closest("[data-cancel]"); if (!b) return;
+    if (!confirm("Cancel your registration for " + b.dataset.title + "?")) return;
+    b.disabled = true;
+    try { await api(`/events/${b.dataset.cancel}/register`, { method: "DELETE" }); toast("Registration cancelled."); }
+    catch (e) { fail(e); }
+    load();
+  });
+  load();
+})();
+</script>
+</body>
+</html>
